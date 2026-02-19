@@ -1,21 +1,10 @@
-# Use a more complete base image
-FROM alpine:latest
+FROM nginx:alpine
 
-# Install nginx and g++
-RUN apk add --no-cache nginx g++
+# Copy nginx configuration
+COPY nginx.conf /etc/nginx/conf.d/default.conf
 
-# Copy application
+# Copy the C++ application
 COPY app.cpp /usr/share/nginx/html/app.cpp
 
-# Compile the app
-RUN g++ /usr/share/nginx/html/app.cpp -o /usr/share/nginx/html/app
-
-# Copy nginx config
-COPY nginx.conf /etc/nginx/http.d/default.conf
-
-# Expose port
+# Expose port 80
 EXPOSE 80
-
-# Start nginx
-CMD ["nginx", "-g", "daemon off;"]
-
