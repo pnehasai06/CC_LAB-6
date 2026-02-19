@@ -1,13 +1,21 @@
-FROM ubuntu:22.04
+# Use a more complete base image
+FROM alpine:latest
 
-RUN apt-get update && apt-get install -y g++
+# Install nginx and g++
+RUN apk add --no-cache nginx g++
 
-WORKDIR /app
+# Copy application
+COPY app.cpp /usr/share/nginx/html/app.cpp
 
-COPY app.cpp .
+# Compile the app
+RUN g++ /usr/share/nginx/html/app.cpp -o /usr/share/nginx/html/app
 
-RUN g++ app.cpp -o app
+# Copy nginx config
+COPY nginx.conf /etc/nginx/http.d/default.conf
 
-EXPOSE 8080
+# Expose port
+EXPOSE 80
 
-CMD ["./app"]
+# Start nginx
+CMD ["nginx", "-g", "daemon off;"]
+
