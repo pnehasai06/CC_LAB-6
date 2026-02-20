@@ -12,20 +12,34 @@ pipeline {
             }
         }
         
+        stage('Cleanup Old Containers') {
+            steps {
+                sh '''
+                    echo "=== Force removing all old containers ==="
+                    # List all containers before cleanup
+                    echo "Before cleanup:"
+                    docker ps -a | grep -E "backend|nginx" || true
+                    
+                    # Force remove by ID and name
+                    docker rm -f $(docker ps -a -q -f name=backend) 2>/dev/null || true
+                    docker rm -f $(docker ps -a -q -f name=nginx) 2>/dev/null || true
+                    docker rm -f backend1 backend2 nginx-lb 2>/dev/null || true
+                    
+                    echo "After cleanup:"
+                    docker ps -a | grep -E "backend|nginx" || echo "All clean!"
+                '''
+            }
+        }
+        
         stage('Deploy Backend Containers') {
             steps {
                 sh '''
-                    echo "=== Cleaning up old containers ==="
-                    # Force remove any existing containers
-                    docker rm -f backend1 backend2 nginx-lb 2>/dev/null || true
-                    
                     echo "=== Starting backend containers ==="
-                    # Use simple names without timestamps
                     docker run -d --name backend1 backend-app
                     docker run -d --name backend2 backend-app
                     
                     echo "=== Running containers ==="
-                    docker ps | grep -E "backend|nginx"
+                    docker ps | grep backend
                 '''
             }
         }
@@ -38,8 +52,9 @@ pipeline {
                     # Wait for backend containers to be ready
                     sleep 5
                     
-                    # Create nginx config
-                    cat > nginx-lb.conf << 'EOF'
+                    # Create nginx config in a writable location
+                    mkdir -p /tmp/nginx-config
+                    cat > /tmp/nginx-config/nginx-lb.conf << 'EOF'
 upstream backend_servers {
     server backend1:80;
     server backend2:80;
@@ -57,19 +72,22 @@ server {
 EOF
                     
                     echo "=== NGINX Configuration ==="
-                    cat nginx-lb.conf
+                    cat /tmp/nginx-config/nginx-lb.conf
                     
-                    # Start nginx container
+                    # Remove old nginx container if exists
+                    docker rm -f nginx-lb 2>/dev/null || true
+                    
+                    # Start nginx container with config from tmp directory
                     docker run -d \
                         --name nginx-lb \
                         -p 80:80 \
-                        -v $(pwd)/nginx-lb.conf:/etc/nginx/conf.d/default.conf \
+                        -v /tmp/nginx-config/nginx-lb.conf:/etc/nginx/conf.d/default.conf \
                         nginx:alpine
                     
-                    # Connect nginx to backend containers network
-                    docker network connect bridge nginx-lb 2>/dev/null || true
-                    
                     echo "=== NGINX Load Balancer deployed ==="
+                    
+                    # Show running containers
+                    docker ps | grep nginx
                 '''
             }
         }
@@ -88,6 +106,12 @@ EOF
                     echo "=== Testing Backend Access ==="
                     sleep 2
                     curl -s http://localhost/app.cpp || echo "App endpoint not yet available"
+                    
+                    echo "=== Testing Load Balancing ==="
+                    echo "First request:"
+                    curl -s http://localhost | grep -o "backend[0-9]" || echo "Response doesn't show backend"
+                    echo "Second request:"
+                    curl -s http://localhost | grep -o "backend[0-9]" || echo "Response doesn't show backend"
                 '''
             }
         }
@@ -98,10 +122,17 @@ EOF
             echo "=== Pipeline Completed ==="
         }
         success {
-            echo "✅ Pipeline executed successfully!"
+            echo "✅ Pipeline executed successfully for PES1UG23AAM200!"
             sh '''
                 echo "=== Final Running Containers ==="
                 docker ps | grep -E "backend|nginx"
+                
+                echo "=== Testing Load Balancer ==="
+                echo "Try these commands manually:"
+                echo "curl http://localhost"
+                echo "curl http://localhost/app.cpp"
+                echo ""
+                echo "Or open in browser: http://localhost"
             '''
         }
         failure {
@@ -113,7 +144,19 @@ EOF
                 docker images | grep backend
                 echo "Docker containers (all):"
                 docker ps -a | grep -E "backend|nginx"
+                echo "=== NGINX Config in /tmp ==="
+                ls -la /tmp/nginx-config/ 2>/dev/null || echo "No nginx config found"
+                cat /tmp/nginx-config/nginx-lb.conf 2>/dev/null || echo "Cannot read nginx config"
             '''
+        }
+        cleanup {
+            echo "=== Cleanup Steps ==="
+            // Uncomment to auto-cleanup after pipeline
+            // sh '''
+            //     echo "Cleaning up containers..."
+            //     docker rm -f nginx-lb 2>/dev/null || true
+            //     docker rm -f backend1 backend2 2>/dev/null || true
+            // '''
         }
     }
 }
