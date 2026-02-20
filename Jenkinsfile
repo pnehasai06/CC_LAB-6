@@ -1,6 +1,11 @@
 pipeline {
     agent any
     
+    environment {
+        // Set a common timestamp for all stages
+        TIMESTAMP = "${System.currentTimeMillis() / 1000}".toInteger().toString()
+    }
+    
     stages {
         stage('Build Backend Image') {
             steps {
@@ -15,24 +20,20 @@ pipeline {
         stage('Deploy Backend Containers') {
             steps {
                 sh '''
-                    # Create unique names with timestamp
-                    TIMESTAMP=$(date +%s)
-                    
                     echo "=== Removing old containers (if possible) ==="
                     docker rm -f backend1 backend2 2>/dev/null || true
                     
                     echo "=== Starting new containers with unique names ==="
+                    echo "Using timestamp: ${TIMESTAMP}"
+                    
                     docker run -d --name backend1-${TIMESTAMP} backend-app
                     docker run -d --name backend2-${TIMESTAMP} backend-app
                     
                     echo "=== Running containers ==="
                     docker ps | grep backend
                     
-                    # Store the actual container names for later use
-                    echo "backend1-${TIMESTAMP}" > backend1-name.txt
-                    echo "backend2-${TIMESTAMP}" > backend2-name.txt
-                    
-                    echo "=== Container names saved to files ==="
+                    # Save timestamp for next stages
+                    echo ${TIMESTAMP} > timestamp.txt
                 '''
             }
         }
@@ -42,13 +43,20 @@ pipeline {
                 sh '''
                     echo "=== Setting up NGINX Load Balancer ==="
                     
-                    # Remove old nginx container if exists
-                    docker rm -f nginx-lb 2>/dev/null || true
+                    # Read the timestamp from file
+                    if [ -f timestamp.txt ]; then
+                        TIMESTAMP=$(cat timestamp.txt)
+                    else
+                        TIMESTAMP=${TIMESTAMP}
+                    fi
                     
-                    # Create a temporary nginx config with the actual container names
-                    TIMESTAMP=$(date +%s)
                     BACKEND1_NAME="backend1-${TIMESTAMP}"
                     BACKEND2_NAME="backend2-${TIMESTAMP}"
+                    
+                    echo "Using backend containers: ${BACKEND1_NAME} and ${BACKEND2_NAME}"
+                    
+                    # Remove old nginx container if exists
+                    docker rm -f nginx-lb 2>/dev/null || true
                     
                     # Create nginx config dynamically
                     cat > nginx-lb.conf << EOF
@@ -67,6 +75,10 @@ server {
     }
 }
 EOF
+                    
+                    # Show the config
+                    echo "=== NGINX Configuration ==="
+                    cat nginx-lb.conf
                     
                     # Start nginx container with the config
                     docker run -d \
@@ -92,6 +104,9 @@ EOF
                     echo "=== Testing NGINX Load Balancer ==="
                     sleep 5
                     curl -I http://localhost 2>/dev/null || echo "NGINX is running but may need a moment to start"
+                    
+                    echo "=== Testing Backend Access ==="
+                    curl http://localhost/app.cpp 2>/dev/null || echo "App endpoint not yet available"
                 '''
             }
         }
@@ -118,15 +133,21 @@ EOF
                 docker images | grep backend
                 echo "Docker containers (all):"
                 docker ps -a | grep -E "backend|nginx"
+                echo "=== Timestamp file contents ==="
+                if [ -f timestamp.txt ]; then
+                    cat timestamp.txt
+                else
+                    echo "No timestamp file found"
+                fi
             '''
         }
         cleanup {
-            echo "=== Cleanup Steps (if any) ==="
-            // Uncomment below to clean up containers after pipeline
+            echo "=== Cleanup Steps ==="
+            // Uncomment to auto-cleanup
             // sh '''
             //     echo "Cleaning up containers..."
-            //     docker rm -f $(docker ps -a | grep backend | awk '{print $1}') 2>/dev/null || true
             //     docker rm -f nginx-lb 2>/dev/null || true
+            //     docker rm -f $(docker ps -a | grep backend | awk '{print $1}') 2>/dev/null || true
             // '''
         }
     }
