@@ -16,17 +16,19 @@ pipeline {
             steps {
                 sh '''
                     echo "=== Force removing all old containers ==="
+                    
                     # List all containers before cleanup
                     echo "Before cleanup:"
                     docker ps -a | grep -E "backend|nginx" || true
                     
-                    # Force remove by ID and name
-                    docker rm -f $(docker ps -a -q -f name=backend) 2>/dev/null || true
-                    docker rm -f $(docker ps -a -q -f name=nginx) 2>/dev/null || true
+                    # Remove by specific names
                     docker rm -f backend1 backend2 nginx-lb 2>/dev/null || true
                     
+                    # Remove all containers with backend or nginx in name
+                    docker ps -a | grep -E "backend|nginx" | awk '{print $1}' | xargs -r docker rm -f 2>/dev/null || true
+                    
                     echo "After cleanup:"
-                    docker ps -a | grep -E "backend|nginx" || echo "All clean!"
+                    docker ps -a | grep -E "backend|nginx" || echo "All clean! No containers found."
                 '''
             }
         }
@@ -52,36 +54,19 @@ pipeline {
                     # Wait for backend containers to be ready
                     sleep 5
                     
-                    # Create nginx config in a writable location
-                    mkdir -p /tmp/nginx-config
-                    cat > /tmp/nginx-config/nginx-lb.conf << 'EOF'
-upstream backend_servers {
-    server backend1:80;
-    server backend2:80;
-}
-
-server {
-    listen 80;
-    
-    location / {
-        proxy_pass http://backend_servers;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-    }
-}
-EOF
-                    
-                    echo "=== NGINX Configuration ==="
-                    cat /tmp/nginx-config/nginx-lb.conf
+                    echo "=== Using nginx config from repository ==="
+                    cat nginx-lb.conf
                     
                     # Remove old nginx container if exists
                     docker rm -f nginx-lb 2>/dev/null || true
                     
-                    # Start nginx container with config from tmp directory
+                    # Start nginx container with config from current directory
                     docker run -d \
                         --name nginx-lb \
                         -p 80:80 \
-                        -v /tmp/nginx-config/nginx-lb.conf:/etc/nginx/conf.d/default.conf \
+                        -v $(pwd)/nginx-lb.conf:/etc/nginx/conf.d/default.conf \
+                        --link backend1 \
+                        --link backend2 \
                         nginx:alpine
                     
                     echo "=== NGINX Load Balancer deployed ==="
@@ -144,9 +129,9 @@ EOF
                 docker images | grep backend
                 echo "Docker containers (all):"
                 docker ps -a | grep -E "backend|nginx"
-                echo "=== NGINX Config in /tmp ==="
-                ls -la /tmp/nginx-config/ 2>/dev/null || echo "No nginx config found"
-                cat /tmp/nginx-config/nginx-lb.conf 2>/dev/null || echo "Cannot read nginx config"
+                echo "=== NGINX Config file ==="
+                ls -la nginx-lb.conf 2>/dev/null || echo "No nginx config found"
+                cat nginx-lb.conf 2>/dev/null || echo "Cannot read nginx config"
             '''
         }
         cleanup {
