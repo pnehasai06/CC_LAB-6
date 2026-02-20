@@ -1,6 +1,11 @@
 pipeline {
     agent any
     
+    environment {
+        // Create a unique timestamp for this build
+        TIMESTAMP = "${System.currentTimeMillis() / 1000}".toInteger().toString()
+    }
+    
     stages {
         stage('Build Backend Image') {
             steps {
@@ -12,36 +17,21 @@ pipeline {
             }
         }
         
-        stage('Cleanup Old Containers') {
-            steps {
-                sh '''
-                    echo "=== Force removing all old containers ==="
-                    
-                    # List all containers before cleanup
-                    echo "Before cleanup:"
-                    docker ps -a | grep -E "backend|nginx" || true
-                    
-                    # Remove by specific names
-                    docker rm -f backend1 backend2 nginx-lb 2>/dev/null || true
-                    
-                    # Remove all containers with backend or nginx in name
-                    docker ps -a | grep -E "backend|nginx" | awk '{print $1}' | xargs -r docker rm -f 2>/dev/null || true
-                    
-                    echo "After cleanup:"
-                    docker ps -a | grep -E "backend|nginx" || echo "All clean! No containers found."
-                '''
-            }
-        }
-        
         stage('Deploy Backend Containers') {
             steps {
                 sh '''
-                    echo "=== Starting backend containers ==="
-                    docker run -d --name backend1 backend-app
-                    docker run -d --name backend2 backend-app
+                    echo "=== Starting backend containers with unique names ==="
+                    echo "Using timestamp: ${TIMESTAMP}"
+                    
+                    # Use timestamp in container names to avoid conflicts
+                    docker run -d --name backend1-${TIMESTAMP} backend-app
+                    docker run -d --name backend2-${TIMESTAMP} backend-app
                     
                     echo "=== Running containers ==="
                     docker ps | grep backend
+                    
+                    # Save timestamp for later stages
+                    echo ${TIMESTAMP} > timestamp.txt
                 '''
             }
         }
@@ -51,28 +41,53 @@ pipeline {
                 sh '''
                     echo "=== Setting up NGINX Load Balancer ==="
                     
+                    # Read timestamp
+                    if [ -f timestamp.txt ]; then
+                        TIMESTAMP=$(cat timestamp.txt)
+                    else
+                        TIMESTAMP=${TIMESTAMP}
+                    fi
+                    
+                    echo "Using backend containers: backend1-${TIMESTAMP} and backend2-${TIMESTAMP}"
+                    
                     # Wait for backend containers to be ready
                     sleep 5
                     
-                    echo "=== Using nginx config from repository ==="
-                    cat nginx-lb.conf
+                    # Create nginx config with dynamic backend names
+                    cat > nginx-lb-${TIMESTAMP}.conf << EOF
+upstream backend_servers {
+    server backend1-${TIMESTAMP}:80;
+    server backend2-${TIMESTAMP}:80;
+}
+
+server {
+    listen 80;
+    
+    location / {
+        proxy_pass http://backend_servers;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+    }
+}
+EOF
                     
-                    # Remove old nginx container if exists
+                    echo "=== NGINX Configuration ==="
+                    cat nginx-lb-${TIMESTAMP}.conf
+                    
+                    # Remove old nginx container (ignore errors)
                     docker rm -f nginx-lb 2>/dev/null || true
                     
-                    # Start nginx container with config from current directory
+                    # Start nginx container with config
                     docker run -d \
                         --name nginx-lb \
                         -p 80:80 \
-                        -v $(pwd)/nginx-lb.conf:/etc/nginx/conf.d/default.conf \
-                        --link backend1 \
-                        --link backend2 \
+                        -v $(pwd)/nginx-lb-${TIMESTAMP}.conf:/etc/nginx/conf.d/default.conf \
                         nginx:alpine
                     
                     echo "=== NGINX Load Balancer deployed ==="
                     
                     # Show running containers
-                    docker ps | grep nginx
+                    docker ps | grep -E "backend|nginx"
                 '''
             }
         }
@@ -81,22 +96,30 @@ pipeline {
             steps {
                 sh '''
                     echo "=== Verifying Deployment ==="
+                    
+                    # Read timestamp
+                    if [ -f timestamp.txt ]; then
+                        TIMESTAMP=$(cat timestamp.txt)
+                    fi
+                    
                     echo "Running containers:"
                     docker ps | grep -E "backend|nginx"
                     
                     echo "=== Testing NGINX Load Balancer ==="
                     sleep 5
-                    curl -s -I http://localhost | head -n 1 || echo "Waiting for NGINX to start..."
                     
-                    echo "=== Testing Backend Access ==="
-                    sleep 2
-                    curl -s http://localhost/app.cpp || echo "App endpoint not yet available"
+                    # Test multiple times to see load balancing
+                    echo "Request 1:"
+                    curl -s http://localhost | grep -o "backend[0-9]-[0-9]*" || echo "Response doesn't show backend"
                     
-                    echo "=== Testing Load Balancing ==="
-                    echo "First request:"
-                    curl -s http://localhost | grep -o "backend[0-9]" || echo "Response doesn't show backend"
-                    echo "Second request:"
-                    curl -s http://localhost | grep -o "backend[0-9]" || echo "Response doesn't show backend"
+                    echo "Request 2:"
+                    curl -s http://localhost | grep -o "backend[0-9]-[0-9]*" || echo "Response doesn't show backend"
+                    
+                    echo "Request 3:"
+                    curl -s http://localhost | grep -o "backend[0-9]-[0-9]*" || echo "Response doesn't show backend"
+                    
+                    echo "=== Testing app.cpp endpoint ==="
+                    curl -s http://localhost/app.cpp | head -5
                 '''
             }
         }
@@ -111,37 +134,21 @@ pipeline {
             sh '''
                 echo "=== Final Running Containers ==="
                 docker ps | grep -E "backend|nginx"
-                
-                echo "=== Testing Load Balancer ==="
-                echo "Try these commands manually:"
+                echo ""
+                echo "=== Test Commands ==="
                 echo "curl http://localhost"
                 echo "curl http://localhost/app.cpp"
                 echo ""
-                echo "Or open in browser: http://localhost"
+                echo "Open in browser: http://localhost"
             '''
         }
         failure {
             echo "❌ Pipeline failed. Check logs above for errors."
             sh '''
                 echo "=== Debug Information ==="
-                echo "Current directory: $(pwd)"
-                echo "Docker images:"
-                docker images | grep backend
-                echo "Docker containers (all):"
-                docker ps -a | grep -E "backend|nginx"
-                echo "=== NGINX Config file ==="
-                ls -la nginx-lb.conf 2>/dev/null || echo "No nginx config found"
-                cat nginx-lb.conf 2>/dev/null || echo "Cannot read nginx config"
+                echo "Docker containers:"
+                docker ps -a | tail -20
             '''
-        }
-        cleanup {
-            echo "=== Cleanup Steps ==="
-            // Uncomment to auto-cleanup after pipeline
-            // sh '''
-            //     echo "Cleaning up containers..."
-            //     docker rm -f nginx-lb 2>/dev/null || true
-            //     docker rm -f backend1 backend2 2>/dev/null || true
-            // '''
         }
     }
 }
