@@ -20,26 +20,15 @@ pipeline {
                     # Simple timestamp
                     TIMESTAMP=$(date +%s)
                     
-                    # Create a network for containers to communicate
-                    docker network create backend-net-$TIMESTAMP 2>/dev/null || true
-                    
-                    # Run backend containers on the network
-                    docker run -d \
-                        --name backend1-$TIMESTAMP \
-                        --network backend-net-$TIMESTAMP \
-                        backend-app
-                    
-                    docker run -d \
-                        --name backend2-$TIMESTAMP \
-                        --network backend-net-$TIMESTAMP \
-                        backend-app
+                    # Run backend containers (no network needed - use default)
+                    docker run -d --name backend1-$TIMESTAMP backend-app
+                    docker run -d --name backend2-$TIMESTAMP backend-app
                     
                     echo "=== Running containers ==="
                     docker ps | grep backend
                     
                     # Save timestamp
                     echo $TIMESTAMP > timestamp.txt
-                    echo backend-net-$TIMESTAMP > network.txt
                 '''
             }
         }
@@ -51,9 +40,7 @@ pipeline {
                     
                     # Read timestamp
                     TIMESTAMP=$(cat timestamp.txt)
-                    NETWORK=$(cat network.txt)
                     
-                    echo "Using network: $NETWORK"
                     echo "Using backend containers: backend1-$TIMESTAMP and backend2-$TIMESTAMP"
                     
                     # Wait for backends
@@ -62,11 +49,12 @@ pipeline {
                     # Remove old nginx if exists
                     docker rm -f nginx-lb 2>/dev/null || true
                     
-                    # Start nginx on the same network
+                    # Start nginx with links to backend containers
                     docker run -d \
                         --name nginx-lb \
-                        --network $NETWORK \
                         -p 80:80 \
+                        --link backend1-$TIMESTAMP \
+                        --link backend2-$TIMESTAMP \
                         nginx:alpine
                     
                     # Create nginx config inside the container
@@ -102,15 +90,15 @@ EOF"
                     echo "=== Testing Load Balancer ==="
                     sleep 5
                     
-                    echo "Testing multiple requests to see load balancing:"
+                    echo "Testing multiple requests:"
                     for i in 1 2 3 4 5; do
                         echo "Request $i:"
-                        curl -s http://localhost | grep -o "backend[0-9]-[0-9]*" || echo "Response: $(curl -s http://localhost | head -1)"
+                        curl -s http://localhost | head -2 || echo "Waiting..."
                         sleep 1
                     done
                     
                     echo "=== Testing app.cpp endpoint ==="
-                    curl -s http://localhost/app.cpp | head -5
+                    curl -s http://localhost/app.cpp || echo "App endpoint not ready"
                 '''
             }
         }
@@ -121,15 +109,15 @@ EOF"
             echo "=== Pipeline Complete ==="
         }
         success {
-            echo "✅ SUCCESS! Load balancer is running at http://localhost"
+            echo "✅ SUCCESS! Load balancer running at http://localhost"
+            sh '''
+                echo "Running containers:"
+                docker ps --format "table {{.Names}}\t{{.Status}}" | grep -E "backend|nginx"
+            '''
         }
         failure {
-            echo "❌ FAILED - Check logs above"
-            sh '''
-                echo "=== Debug Info ==="
-                docker ps -a | tail -10
-                docker network ls | tail -5
-            '''
+            echo "❌ FAILED - Last 10 containers:"
+            sh 'docker ps -a | tail -10'
         }
     }
 }
