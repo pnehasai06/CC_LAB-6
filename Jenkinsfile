@@ -49,8 +49,8 @@ pipeline {
                     # Create nginx config template with placeholder (preserves $ variables)
                     cat > nginx-lb.template << 'EOF'
 upstream backend_servers {
-    server backend1-__TIMESTAMP__:80;
-    server backend2-__TIMESTAMP__:80;
+    server backend1-__TIMESTAMP__:8080;
+    server backend2-__TIMESTAMP__:8080;
 }
 
 server {
