@@ -49,19 +49,8 @@ pipeline {
                     # Remove old nginx if exists
                     docker rm -f nginx-lb 2>/dev/null || true
                     
-                    # Start nginx with links to backend containers - USING PORT 8081
-                    docker run -d \
-                        --name nginx-lb \
-                        -p 8081:80 \
-                        --link backend1-$TIMESTAMP \
-                        --link backend2-$TIMESTAMP \
-                        nginx:alpine
-                    
-                    # Wait for nginx to start
-                    sleep 3
-                    
-                    # Create nginx config inside the container - WITH PROPER ESCAPING
-                    docker exec nginx-lb sh -c "cat > /etc/nginx/conf.d/default.conf << 'EOF'
+                    # Create nginx config file in workspace
+                    cat > nginx-lb.conf << EOF
 upstream backend_servers {
     server backend1-$TIMESTAMP:80;
     server backend2-$TIMESTAMP:80;
@@ -78,13 +67,19 @@ server {
         proxy_set_header X-Forwarded-Proto \$scheme;
     }
 }
-EOF"
+EOF
                     
-                    # Test nginx configuration
-                    docker exec nginx-lb nginx -t
+                    echo "=== NGINX Configuration ==="
+                    cat nginx-lb.conf
                     
-                    # Reload nginx if config is valid
-                    docker exec nginx-lb nginx -s reload
+                    # Start nginx with config mounted as volume
+                    docker run -d \
+                        --name nginx-lb \
+                        -p 8081:80 \
+                        -v $(pwd)/nginx-lb.conf:/etc/nginx/conf.d/default.conf \
+                        --link backend1-$TIMESTAMP \
+                        --link backend2-$TIMESTAMP \
+                        nginx:alpine
                     
                     echo "=== NGINX deployed successfully on port 8081 ==="
                     docker ps | grep nginx
@@ -137,6 +132,9 @@ EOF"
                 
                 echo "=== Timestamp value ==="
                 cat timestamp.txt 2>/dev/null || echo "No timestamp file"
+                
+                echo "=== nginx config file content ==="
+                cat nginx-lb.conf 2>/dev/null || echo "No nginx-lb.conf file"
             '''
         }
     }
