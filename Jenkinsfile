@@ -46,14 +46,11 @@ pipeline {
                     # Wait for backends
                     sleep 5
                     
-                    # Remove old nginx if exists
-                    docker rm -f nginx-lb 2>/dev/null || true
-                    
-                    # Create nginx config file in workspace
-                    cat > nginx-lb.conf << EOF
+                    # Create nginx config template with placeholder (preserves $ variables)
+                    cat > nginx-lb.template << 'EOF'
 upstream backend_servers {
-    server backend1-$TIMESTAMP:80;
-    server backend2-$TIMESTAMP:80;
+    server backend1-__TIMESTAMP__:80;
+    server backend2-__TIMESTAMP__:80;
 }
 
 server {
@@ -61,27 +58,33 @@ server {
     
     location / {
         proxy_pass http://backend_servers;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
     }
 }
 EOF
                     
+                    # Replace placeholder with actual timestamp
+                    sed "s/__TIMESTAMP__/$TIMESTAMP/g" nginx-lb.template > nginx-lb.conf
+                    
                     echo "=== NGINX Configuration ==="
                     cat nginx-lb.conf
                     
+                    # Use a unique name for nginx container to avoid conflicts
+                    NGINX_NAME="nginx-lb-$TIMESTAMP"
+                    
                     # Start nginx with config mounted as volume
                     docker run -d \
-                        --name nginx-lb \
+                        --name $NGINX_NAME \
                         -p 8081:80 \
                         -v $(pwd)/nginx-lb.conf:/etc/nginx/conf.d/default.conf \
                         --link backend1-$TIMESTAMP \
                         --link backend2-$TIMESTAMP \
                         nginx:alpine
                     
-                    echo "=== NGINX deployed successfully on port 8081 ==="
+                    echo "=== NGINX deployed successfully with name $NGINX_NAME on port 8081 ==="
                     docker ps | grep nginx
                 '''
             }
@@ -125,10 +128,22 @@ EOF
                 docker ps -a | tail -10
                 
                 echo "=== Port 8081 Status ==="
-                sudo lsof -i :8081 || echo "Port 8081 is free"
+                # Use command -v to check if netstat is available, fallback to ss
+                if command -v netstat >/dev/null 2>&1; then
+                    netstat -tlnp 2>/dev/null | grep 8081 || echo "Port 8081 is free"
+                elif command -v ss >/dev/null 2>&1; then
+                    ss -tlnp 2>/dev/null | grep 8081 || echo "Port 8081 is free"
+                else
+                    echo "Cannot check port status"
+                fi
                 
-                echo "=== Last 20 lines of container logs ==="
-                docker logs nginx-lb --tail 20 2>/dev/null || echo "No nginx-lb container"
+                echo "=== Last 20 lines of container logs (latest nginx) ==="
+                LATEST_NGINX=$(docker ps --format '{{.Names}}' | grep nginx-lb | head -1)
+                if [ -n "$LATEST_NGINX" ]; then
+                    docker logs $LATEST_NGINX --tail 20
+                else
+                    echo "No nginx-lb container found"
+                fi
                 
                 echo "=== Timestamp value ==="
                 cat timestamp.txt 2>/dev/null || echo "No timestamp file"
