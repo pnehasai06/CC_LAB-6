@@ -49,10 +49,10 @@ pipeline {
                     # Remove old nginx if exists
                     docker rm -f nginx-lb 2>/dev/null || true
                     
-                    # Start nginx with links to backend containers
+                    # Start nginx with links to backend containers - USING PORT 8081
                     docker run -d \
                         --name nginx-lb \
-                        -p 80:80 \
+                        -p 8081:80 \
                         --link backend1-$TIMESTAMP \
                         --link backend2-$TIMESTAMP \
                         nginx:alpine
@@ -86,7 +86,7 @@ EOF"
                     # Reload nginx if config is valid
                     docker exec nginx-lb nginx -s reload
                     
-                    echo "=== NGINX deployed successfully on port 80 ==="
+                    echo "=== NGINX deployed successfully on port 8081 ==="
                     docker ps | grep nginx
                 '''
             }
@@ -95,18 +95,18 @@ EOF"
         stage('Test') {
             steps {
                 sh '''
-                    echo "=== Testing Load Balancer on port 80 ==="
+                    echo "=== Testing Load Balancer on port 8081 ==="
                     sleep 5
                     
                     echo "Testing multiple requests to see load balancing:"
                     for i in 1 2 3 4 5; do
                         echo "Request $i:"
-                        curl -s http://localhost | head -2 || echo "Waiting..."
+                        curl -s http://localhost:8081 | head -2 || echo "Waiting..."
                         sleep 1
                     done
                     
                     echo "=== Testing app.cpp endpoint ==="
-                    curl -s http://localhost/app.cpp || echo "App endpoint not ready"
+                    curl -s http://localhost:8081/app.cpp || echo "App endpoint not ready"
                 '''
             }
         }
@@ -117,7 +117,7 @@ EOF"
             echo "=== Pipeline Complete ==="
         }
         success {
-            echo "✅ SUCCESS! Load balancer is running at http://localhost"
+            echo "✅ SUCCESS! Load balancer is running at http://localhost:8081"
             sh '''
                 echo "Running containers:"
                 docker ps --format "table {{.Names}}\t{{.Status}}" | grep -E "backend|nginx" || echo "No containers found"
@@ -129,8 +129,8 @@ EOF"
                 echo "=== Current Containers ==="
                 docker ps -a | tail -10
                 
-                echo "=== Port 80 Status ==="
-                sudo lsof -i :80 || echo "Port 80 is free"
+                echo "=== Port 8081 Status ==="
+                sudo lsof -i :8081 || echo "Port 8081 is free"
                 
                 echo "=== Last 20 lines of container logs ==="
                 docker logs nginx-lb --tail 20 2>/dev/null || echo "No nginx-lb container"
