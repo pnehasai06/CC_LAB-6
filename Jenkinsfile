@@ -75,14 +75,23 @@ EOF
                     # Use a unique name for nginx container to avoid conflicts
                     NGINX_NAME="nginx-lb-$TIMESTAMP"
                     
-                    # Start nginx with config mounted as volume
+                    # Start nginx (no volume mount)
                     docker run -d \
                         --name $NGINX_NAME \
                         -p 8081:80 \
-                        -v $(pwd)/nginx-lb.conf:/etc/nginx/conf.d/default.conf \
                         --link backend1-$TIMESTAMP \
                         --link backend2-$TIMESTAMP \
                         nginx:alpine
+                    
+                    # Wait for nginx to start
+                    sleep 3
+                    
+                    # Copy the config into the container
+                    docker cp nginx-lb.conf $NGINX_NAME:/etc/nginx/conf.d/default.conf
+                    
+                    # Test and reload nginx
+                    docker exec $NGINX_NAME nginx -t
+                    docker exec $NGINX_NAME nginx -s reload
                     
                     echo "=== NGINX deployed successfully with name $NGINX_NAME on port 8081 ==="
                     docker ps | grep nginx
